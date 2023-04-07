@@ -8,6 +8,9 @@ let enum_dict = [1 : "e159ca3764f64b66b0c6267879d9d627",
                  5 : "55fd2c90348b3e9d28aae8244f249f0e",
                  6 : "8c55b717ba786b21978cafef9d924d06"]
 
+let localization_func_dict = ["nearest_to_best_two" : nearest_to_best_two,
+                              "maximum_nearby_interections" : maximum_nearby_interections]
+
 struct DefaultKeys {
     static let beacon_radius = "beacon_radius"
     static let beacon_angle = "beacon_angle"
@@ -17,6 +20,8 @@ let m_to_pixel_mult = 50.0
 let INFINITY = Double.greatestFiniteMagnitude
 
 var beacon_dict = [String : Beacon]() // (id : Beacon object)
+var localization_func = "nearest_to_best_two"
+
 
 class Beacon : Comparable, CustomStringConvertible{
     static func < (lhs: Beacon, rhs: Beacon) -> Bool {
@@ -56,10 +61,13 @@ struct ContentView: View {
     @State private var settings_beacons_use = ""
     @State private var showingAlert : [Bool] = Array(repeating: false, count: UWBManager.max_focused)
     @State private var settingsAlert = false
+    @State private var func_picker_selection = localization_func
     
     var body: some View {
         if uwb.update{}
         ZStack{
+            
+            
             
             ForEach(uwb.focused.sorted(by: <), id : \.key){ (index, beacon) in
                 ZStack {
@@ -88,17 +96,31 @@ struct ContentView: View {
             
             Text(String(format: "Distance to Center: %.2f", pow(uwb.atX * uwb.atX + uwb.atY * uwb.atY, 0.5)))
                 .offset(x: 0, y: -200)
+            
+            
         }
         
-        
-        Button("settings"){
-            settingsAlert.toggle()
-        }
-        .alert(String("Settings"), isPresented: $settingsAlert){
-            TextField(String(format:"beacons to use (c: %d)", UWBManager.beacons_used_for_localization), text: $settings_beacons_use)
+        ZStack{
+            Button("settings"){
+                settingsAlert.toggle()
+            }
+            .alert(String("Settings"), isPresented: $settingsAlert){
+                TextField(String(format:"beacons to use (c: %d)", UWBManager.beacons_used_for_localization), text: $settings_beacons_use)
 
-            Button("OK", action: {() in self.updateSettings()})
-        }.offset(x: 0, y: 360)
+                Button("OK", action: {() in self.updateSettings()})
+            }.offset(x: -80, y: 360)
+            
+            Picker("function", selection: $func_picker_selection) {
+                ForEach(localization_func_dict.keys.sorted(by: <), id: \.self){
+                    Text($0)
+                }
+            }
+            .offset(x: 50, y: 360)
+            .pickerStyle(.menu)
+            .onChange(of: func_picker_selection) { _ in localization_func = func_picker_selection}
+
+        }
+        
         
         
     }
@@ -242,7 +264,7 @@ extension UWBManager: UWBPositioningObserver {
             use_beacons.append(focused[i]!)
         }
                 
-        let at = localize_on_beacons(beacons: use_beacons, radiusBuffer: radiusBuffer)
+        let at = localize_on_beacons(func_name: localization_func, beacons: use_beacons, radiusBuffer: radiusBuffer)
         
         if at.dist >= 0.0{
             atX = at.x
@@ -308,28 +330,97 @@ func beacon_draw_coords(beaconNum : Int) -> CGPoint{
     
 }
 
-func localize_on_beacons(beacons: [Beacon], radiusBuffer: Double) -> (x: Double, y: Double, dist: Double){
-    var bestAt = (x: 0.0, y: 0.0, dist: -1.0)
-    for i in 2...beacons.count - 1{
-        let c1p = (Double(beacon_draw_coords(beaconNum: beacons[0].num).x)/m_to_pixel_mult,
-                   Double(beacon_draw_coords(beaconNum: beacons[0].num).y)/m_to_pixel_mult)
+func localize_on_beacons(
+    func_name: String,
+    beacons: [Beacon],
+    radiusBuffer: Double)
+    -> (x: Double, y: Double, dist: Double){
+    
+        let localization_function: ([Beacon], Double) -> (Double, Double, Double) = localization_func_dict[func_name]!
         
-        let c2p = (Double(beacon_draw_coords(beaconNum: beacons[1].num).x)/m_to_pixel_mult,
-                   Double(beacon_draw_coords(beaconNum: beacons[1].num).y)/m_to_pixel_mult)
-        
-        let c3p = (Double(beacon_draw_coords(beaconNum: beacons[i].num).x)/m_to_pixel_mult,
-                   Double(beacon_draw_coords(beaconNum: beacons[i].num).y)/m_to_pixel_mult)
-        
-        let at = overlap_loc(c1r: beacons[0].dist + radiusBuffer, c1p: c1p, c2r: beacons[1].dist + radiusBuffer, c2p: c2p, c3r: beacons[i].dist + radiusBuffer, c3p: c3p)
-        
-        if (bestAt.dist == -1.0 || bestAt.dist > at.dist){
-            bestAt = at
+        return localization_function(beacons, radiusBuffer)
+    
+    
+    
+}
+
+func nearest_to_best_two(beacons: [Beacon], radiusBuffer: Double) -> (x: Double, y: Double, dist: Double){
+        var bestAt = (x: 0.0, y: 0.0, dist: -1.0)
+        for i in 2...beacons.count - 1{
+            let c1p = (Double(beacon_draw_coords(beaconNum: beacons[0].num).x)/m_to_pixel_mult,
+                       Double(beacon_draw_coords(beaconNum: beacons[0].num).y)/m_to_pixel_mult)
+            
+            let c2p = (Double(beacon_draw_coords(beaconNum: beacons[1].num).x)/m_to_pixel_mult,
+                       Double(beacon_draw_coords(beaconNum: beacons[1].num).y)/m_to_pixel_mult)
+            
+            let c3p = (Double(beacon_draw_coords(beaconNum: beacons[i].num).x)/m_to_pixel_mult,
+                       Double(beacon_draw_coords(beaconNum: beacons[i].num).y)/m_to_pixel_mult)
+            
+            let at = overlap_loc(c1r: beacons[0].dist + radiusBuffer, c1p: c1p, c2r: beacons[1].dist + radiusBuffer, c2p: c2p, c3r: beacons[i].dist + radiusBuffer, c3p: c3p)
+            
+            if (bestAt.dist == -1.0 || bestAt.dist > at.dist){
+                bestAt = at
+            }
         }
+        
+        return bestAt
+}
+
+func maximum_nearby_interections(beacons: [Beacon], radiusBuffer: Double) -> (x: Double, y: Double, dist: Double){
+    let threshold = 0.25
+    
+    var bestAt = (x: 0.0, y: 0.0, dist: -1.0)
+    var bestWithin = 0
+    var intersections: [(x: Double, y: Double)] = []
+    
+    if beacons.count >= 2
+    {
+        for i in 1...beacons.count - 1 {
+            let c1p = (Double(beacon_draw_coords(beaconNum: beacons[i].num).x)/m_to_pixel_mult,
+                       Double(beacon_draw_coords(beaconNum: beacons[i].num).y)/m_to_pixel_mult)
+            
+            if i < beacons.count - 1 {
+                for j in i+1...beacons.count - 1 {
+                    
+                    let c2p = (Double(beacon_draw_coords(beaconNum: beacons[j].num).x)/m_to_pixel_mult,
+                               Double(beacon_draw_coords(beaconNum: beacons[j].num).y)/m_to_pixel_mult)
+                    let at = circle_overlap_loc(c1r: beacons[0].dist + radiusBuffer, c1p: c1p, c2r: beacons[1].dist + radiusBuffer, c2p: c2p)
+                    
+                    if at.validPoints {
+                        intersections.append((at.x1, at.y1))
+                        
+                        if at.x1 != at.x2 || at.y1 != at.y2 {
+                            intersections.append((at.x2, at.y2))
+                        }
+                    }
+                    
+                }
+            }
+            
+            
+        }
+        if intersections.count > 1 {
+
+            for i in 1...intersections.count - 1 {
+                var within = 0
+                let x = intersections[i].x
+                let y = intersections[i].y
+                for j in 1...intersections.count - 1 {
+                    if point_in_circle(x: x, y: y, cr: threshold, cp: intersections[j]) && i != j {
+                        within += 1
+                    }
+                }
+                
+                if within > bestWithin {
+                    bestWithin = within
+                    bestAt = (x: x, y: y, dist: 1.0)
+                }
+                
+            }
+        }
+        
     }
-    
     return bestAt
-    
-    
     
 }
 
